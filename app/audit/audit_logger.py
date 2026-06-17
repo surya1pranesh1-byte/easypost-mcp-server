@@ -14,8 +14,7 @@ class AuditLogger:
 
     def record(self, event: str, payload: dict[str, Any] | None = None) -> None:
         self._logger.info(
-            f"audit.{event}",
-            audit=True,
             event=event,
+            audit=True,
             **redact_for_logs(payload or {}),
         )
