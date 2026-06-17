@@ -1,0 +1,90 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GCP Cloud Build — EasyPost MCP Server
+#
+# Triggered by: push to main branch (configure in Cloud Build console)
+#
+# Substitution variables (set defaults here; override in trigger config):
+#   _REGION        GCP region for Artifact Registry + Cloud Run
+#   _REPO          Artifact Registry repository name
+#   _SERVICE       Cloud Run service name
+#   _MIN_INSTANCES Minimum Cloud Run instances (1 = always warm)
+#   _MAX_INSTANCES Maximum Cloud Run instances
+# ─────────────────────────────────────────────────────────────────────────────
+
+substitutions:
+  _REGION: us-central1
+  _REPO: easypost-mcp
+  _SERVICE: easypost-mcp
+  _MIN_INSTANCES: "1"
+  _MAX_INSTANCES: "10"
+
+steps:
+  # ── Step 1: Build the container image ──────────────────────────────────────
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$COMMIT_SHA
+      - --tag=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+      - --cache-from=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+      - --build-arg=BUILDKIT_INLINE_CACHE=1
+      - .
+    env:
+      - DOCKER_BUILDKIT=1
+
+  # ── Step 2: Push both tags to Artifact Registry ────────────────────────────
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}
+    waitFor:
+      - build
+
+  # ── Step 3: Deploy to Cloud Run ────────────────────────────────────────────
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --port=8080
+      # ── Compute defaults (adjust per load profile) ──────────────────────────
+      # 1 CPU keeps costs low; increase to 2 if tool latency is a bottleneck.
+      - --cpu=1
+      # 512 Mi is sufficient for the Python MCP server + EasyPost SDK.
+      - --memory=512Mi
+      # 80 concurrent requests per instance is the Cloud Run default; tuned for
+      # async ASGI (uvicorn handles requests concurrently inside one process).
+      - --concurrency=80
+      # min=1 keeps one instance warm to avoid cold-start latency for the
+      # internal EasyPost Assistant. Set to 0 to eliminate idle costs if cold
+      # starts (~1-2 s) are acceptable.
+      - --min-instances=${_MIN_INSTANCES}
+      - --max-instances=${_MAX_INSTANCES}
+      # Request timeout: 60 s covers the slowest EasyPost operations.
+      - --timeout=60s
+      # ── Secrets (injected as env vars from Secret Manager) ──────────────────
+      - --set-secrets=EASYPOST_API_KEY=easypost-api-key:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest
+      # ── Static env vars ─────────────────────────────────────────────────────
+      - --set-env-vars=NODE_ENV=production,LOG_LEVEL=info,EASYPOST_MODE=production,MCP_HTTP_HOST=0.0.0.0
+      # Allow unauthenticated traffic; the MCP /mcp endpoint is protected by
+      # the application-level Bearer token / OAuth 2.0 layer.
+      - --allow-unauthenticated
+    waitFor:
+      - push
+
+# Send build logs to Cloud Logging only (no GCS bucket required)
+options:
+  logging: CLOUD_LOGGING_ONLY
+  # Use a high-CPU machine type for faster Docker builds
+  machineType: E2_HIGHCPU_8
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
