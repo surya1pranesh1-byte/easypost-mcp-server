@@ -14,7 +14,6 @@ class TrackingService:
         self._easypost = easypost_client
 
     async def track_package(self, input: TrackPackageInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         tracker = await self._easypost.execute(
             "tracker.create",
             lambda client: client.tracker.create(
@@ -22,18 +21,15 @@ class TrackingService:
                 carrier=input.carrier,
             ),
             context,
-            api_key,
         )
         return {"ok": True, "tracker": map_tracker(tracker)}
 
     async def get_tracking_history(self, input: GetTrackingHistoryInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         if input.tracker_id:
             tracker = await self._easypost.execute(
                 "tracker.retrieve",
                 lambda client: client.tracker.retrieve(input.tracker_id),
                 context,
-                api_key,
             )
         else:
             tracker = await self._easypost.execute(
@@ -43,7 +39,6 @@ class TrackingService:
                     carrier=input.carrier,
                 ),
                 context,
-                api_key,
             )
         mapped = map_tracker(tracker)
         history = (mapped or {}).get("tracking_details", []) if mapped else []

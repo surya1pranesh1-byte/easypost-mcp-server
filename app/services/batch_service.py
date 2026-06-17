@@ -20,7 +20,6 @@ class BatchService:
         self._confirmations = confirmations
 
     async def create_batch(self, input: CreateBatchInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         shipments = []
         for s in input.shipments:
             if hasattr(s, "shipment_id") and s.shipment_id:
@@ -32,12 +31,10 @@ class BatchService:
             "batch.create",
             lambda client: client.batch.create(shipments=shipments),
             context,
-            api_key,
         )
         return {"ok": True, "batch": batch}
 
     async def buy_batch(self, input: BuyBatchInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         await self._confirmations.require_confirmed(
             input,
             action="buy_batch",
@@ -49,16 +46,13 @@ class BatchService:
             "batch.buy",
             lambda client: client.batch.buy(input.batch_id),
             context,
-            api_key,
         )
         return {"ok": True, "batch": batch}
 
     async def batch_status(self, input: BatchStatusInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         batch = await self._easypost.execute(
             "batch.retrieve",
             lambda client: client.batch.retrieve(input.batch_id),
             context,
-            api_key,
         )
         return {"ok": True, "batch": batch}

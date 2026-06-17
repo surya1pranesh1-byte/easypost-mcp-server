@@ -64,8 +64,6 @@ def _to_safe_error(error: Exception, correlation_id: str) -> dict[str, Any]:
 def create_mcp_server(
     config: AppConfig,
     services: Services,
-    *,
-    get_auth_context: Callable[[], dict | None] | None = None,
 ) -> Server:
     logger = get_logger()
     audit_logger = AuditLogger(logger)
@@ -103,7 +101,6 @@ def create_mcp_server(
             )
 
             tool = registry.get(name)
-            auth_context = get_auth_context() if get_auth_context else None
 
             result = await tool.execute(
                 arguments,
@@ -113,7 +110,6 @@ def create_mcp_server(
                     "pipeline": pipeline,
                     "resources": services.resources,
                     "server": server,
-                    "auth": auth_context,
                 },
             )
 

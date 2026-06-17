@@ -24,7 +24,6 @@ class ReturnService:
         self._elicitation = elicitation
 
     async def create_return_label(self, input: CreateReturnLabelInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         options = {"original_shipment_id": input.original_shipment_id} if input.original_shipment_id else None
 
         shipment = await self._easypost.execute(
@@ -37,7 +36,6 @@ class ReturnService:
                 options=options,
             ),
             context,
-            api_key,
         )
 
         rates = getattr(shipment, "rates", []) or []
@@ -82,6 +80,5 @@ class ReturnService:
             "return.buy",
             lambda client: client.shipment.buy(getattr(shipment, "id"), rate),
             context,
-            api_key,
         )
         return {"ok": True, "shipment": map_shipment(bought), "purchased_rate": mapped_rate}

@@ -29,11 +29,6 @@ class _EnvVars(BaseSettings):
     MCP_HTTP_HOST: str = "0.0.0.0"
     # Cloud Run (and other container platforms) inject PORT; takes precedence over MCP_HTTP_PORT
     PORT: int | None = Field(default=None, gt=0)
-    OAUTH_ISSUER_URL: str | None = None
-    OAUTH_CLIENT_ID: str = "easypost-mcp"
-    OAUTH_CLIENT_SECRET: str | None = None
-    OAUTH_CODE_EXPIRY_SECONDS: int = Field(default=300, gt=0)
-    OAUTH_TOKEN_EXPIRY_SECONDS: int = Field(default=3600, gt=0)
 
 
 @dataclass(frozen=True)
@@ -61,15 +56,6 @@ class HttpConfig:
 
 
 @dataclass(frozen=True)
-class OAuthConfig:
-    issuer_url: str | None
-    client_id: str
-    client_secret: str | None
-    code_expiry_seconds: int
-    token_expiry_seconds: int
-
-
-@dataclass(frozen=True)
 class AppConfig:
     env: str
     is_production: bool
@@ -78,7 +64,6 @@ class AppConfig:
     logging: LoggingConfig
     rate_limit: RateLimitConfig
     http: HttpConfig
-    oauth: OAuthConfig
 
 
 def _build_config(env: _EnvVars) -> AppConfig:
@@ -95,13 +80,6 @@ def _build_config(env: _EnvVars) -> AppConfig:
         logging=LoggingConfig(level=env.LOG_LEVEL),
         rate_limit=RateLimitConfig(per_minute=env.MCP_RATE_LIMIT_PER_MINUTE),
         http=HttpConfig(port=env.PORT if env.PORT is not None else env.MCP_HTTP_PORT, host=env.MCP_HTTP_HOST),
-        oauth=OAuthConfig(
-            issuer_url=env.OAUTH_ISSUER_URL,
-            client_id=env.OAUTH_CLIENT_ID,
-            client_secret=env.OAUTH_CLIENT_SECRET,
-            code_expiry_seconds=env.OAUTH_CODE_EXPIRY_SECONDS,
-            token_expiry_seconds=env.OAUTH_TOKEN_EXPIRY_SECONDS,
-        ),
     )
 
 
