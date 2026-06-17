@@ -9,7 +9,7 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 starlette>=0.41.0
 
-# HTTP client (OAuth validation)
+# HTTP client
 httpx>=0.27.0
 
 # Configuration & validation

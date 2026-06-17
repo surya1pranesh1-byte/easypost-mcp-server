@@ -5,14 +5,12 @@
 # Usage:
 #   export GCP_PROJECT_ID=my-project
 #   export EASYPOST_API_KEY=EZAK...
-#   export OAUTH_CLIENT_SECRET=my-secret
-#   bash deploy.sh [--setup | --deploy | --update-env | --secrets | --monitoring]
+#   bash deploy.sh [--setup | --deploy | --secrets | --monitoring]
 #
 # Flags:
 #   --setup       First-time GCP service setup (enable APIs, Artifact Registry,
 #                 secrets). Run once per project.
 #   --deploy      Build + push image + deploy to Cloud Run.
-#   --update-env  Update OAUTH_ISSUER_URL after the first deploy.
 #   --secrets     (Re-)populate Secret Manager values.
 #   --monitoring  Create log-based metrics and alerting policies.
 #   (no flag)     Runs --setup + --deploy + --update-env in sequence.
@@ -77,7 +75,6 @@ setup_artifact_registry() {
 # ── Step 3: Create / update secrets in Secret Manager ────────────────────────
 setup_secrets() {
   require_env EASYPOST_API_KEY
-  require_env OAUTH_CLIENT_SECRET
 
   info "Configuring Secret Manager..."
 
@@ -96,20 +93,17 @@ setup_secrets() {
   }
 
   create_or_update_secret "easypost-api-key"      "${EASYPOST_API_KEY}"
-  create_or_update_secret "oauth-client-secret"   "${OAUTH_CLIENT_SECRET}"
 
   success "Secrets configured in Secret Manager"
 
   # Grant Cloud Run default service account access to these secrets
   local sa="${PROJECT_ID}@appspot.gserviceaccount.com"
   info "Granting Secret Manager access to service account: ${sa}"
-  for secret in easypost-api-key oauth-client-secret; do
-    gcloud secrets add-iam-policy-binding "${secret}" \
-      --member="serviceAccount:${sa}" \
-      --role="roles/secretmanager.secretAccessor" \
-      --project="${PROJECT_ID}" \
-      --quiet || warn "Could not bind IAM for ${secret} — ensure the service account is correct"
-  done
+  gcloud secrets add-iam-policy-binding "easypost-api-key" \
+    --member="serviceAccount:${sa}" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="${PROJECT_ID}" \
+    --quiet || warn "Could not bind IAM for easypost-api-key — ensure the service account is correct"
   success "IAM bindings applied"
 }
 
@@ -144,7 +138,7 @@ deploy_cloud_run() {
     --min-instances=1 \
     --max-instances=10 \
     --timeout=60s \
-    --set-secrets="EASYPOST_API_KEY=easypost-api-key:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest" \
+    --set-secrets="EASYPOST_API_KEY=easypost-api-key:latest" \
     --set-env-vars="NODE_ENV=production,LOG_LEVEL=info,EASYPOST_MODE=production,MCP_HTTP_HOST=0.0.0.0" \
     --allow-unauthenticated \
     --project="${PROJECT_ID}"
@@ -160,31 +154,7 @@ deploy_cloud_run() {
   echo "SERVICE_URL=${SERVICE_URL}" > .deploy-output
 }
 
-# ── Step 6: Set OAUTH_ISSUER_URL now that we have the URL ─────────────────────
-update_oauth_issuer() {
-  local url_file=".deploy-output"
-  if [[ ! -f "${url_file}" ]]; then
-    warn ".deploy-output not found — fetching URL from gcloud..."
-    SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
-      --region="${REGION}" \
-      --project="${PROJECT_ID}" \
-      --format="value(status.url)")
-  else
-    # shellcheck disable=SC1090
-    source "${url_file}"
-  fi
-
-  info "Setting OAUTH_ISSUER_URL=${SERVICE_URL}"
-  gcloud run services update "${SERVICE_NAME}" \
-    --region="${REGION}" \
-    --project="${PROJECT_ID}" \
-    --update-env-vars="OAUTH_ISSUER_URL=${SERVICE_URL}" \
-    --quiet
-
-  success "OAUTH_ISSUER_URL configured — OAuth discovery is now active"
-}
-
-# ── Step 7: Create log-based metrics for monitoring ───────────────────────────
+# ── Step 6: Create log-based metrics for monitoring ───────────────────────────
 setup_monitoring() {
   info "Creating Cloud Monitoring log-based metrics..."
 
@@ -307,9 +277,6 @@ main() {
       build_and_push
       deploy_cloud_run
       ;;
-    --update-env)
-      update_oauth_issuer
-      ;;
     --secrets)
       setup_secrets
       ;;
@@ -322,11 +289,10 @@ main() {
       setup_secrets
       build_and_push
       deploy_cloud_run
-      update_oauth_issuer
       setup_monitoring
       ;;
     *)
-      die "Unknown flag: ${mode}. Use --setup | --deploy | --update-env | --secrets | --monitoring"
+      die "Unknown flag: ${mode}. Use --setup | --deploy | --secrets | --monitoring"
       ;;
   esac
 

@@ -33,7 +33,6 @@ class AddressService:
         self._confirmations = confirmations
 
     async def verify_address(self, input: VerifyAddressInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         address_dict = input.address.model_dump(exclude_none=True)
 
         address = await self._easypost.execute(
@@ -44,7 +43,6 @@ class AddressService:
                 else client.address.create(**{**address_dict, "verify": input.verifications})
             ),
             context,
-            api_key,
         )
 
         mapped = map_address(address)
@@ -89,14 +87,12 @@ class AddressService:
         }
 
     async def create_address(self, input: CreateAddressInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         address_dict = input.address.model_dump(exclude_none=True)
 
         address = await self._easypost.execute(
             "address.create",
             lambda client: client.address.create(**{**address_dict, "verify": input.verify}),
             context,
-            api_key,
         )
 
         mapped = map_address(address)

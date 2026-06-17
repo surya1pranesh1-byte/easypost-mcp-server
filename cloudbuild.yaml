@@ -70,11 +70,10 @@ steps:
       # Request timeout: 60 s covers the slowest EasyPost operations.
       - --timeout=60s
       # ── Secrets (injected as env vars from Secret Manager) ──────────────────
-      - --set-secrets=EASYPOST_API_KEY=easypost-api-key:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest
+      - --set-secrets=EASYPOST_API_KEY=easypost-api-key:latest
       # ── Static env vars ─────────────────────────────────────────────────────
       - --set-env-vars=NODE_ENV=production,LOG_LEVEL=info,EASYPOST_MODE=production,MCP_HTTP_HOST=0.0.0.0
-      # Allow unauthenticated traffic; the MCP /mcp endpoint is protected by
-      # the application-level Bearer token / OAuth 2.0 layer.
+      # Allow unauthenticated traffic; the server uses the configured API key.
       - --allow-unauthenticated
     waitFor:
       - push

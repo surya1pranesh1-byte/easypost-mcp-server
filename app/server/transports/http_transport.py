@@ -11,9 +11,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from mcp.server.streamable_http import StreamableHTTPServerTransport
 
-from app.auth.token_store import TokenStore
-from app.middleware.auth import AuthMiddleware
-from app.middleware.oauth_endpoints import create_oauth_router
 from app.server.mcp_server import create_mcp_server
 
 if TYPE_CHECKING:
@@ -31,17 +28,10 @@ async def start_http_transport(config: "AppConfig", services: "Services") -> Non
     from app.logging.logger import get_logger
 
     logger = get_logger()
-    token_store = TokenStore()
     sessions: dict[str, _Session] = {}
-
-    async def cleanup_tokens() -> None:
-        while True:
-            await asyncio.sleep(60)
-            token_store.cleanup()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        token_cleanup_task = asyncio.create_task(cleanup_tokens())
         logger.info(
             "EasyPost MCP HTTP server starting",
             host=config.http.host,
@@ -53,19 +43,10 @@ async def start_http_transport(config: "AppConfig", services: "Services") -> Non
             yield
         finally:
             logger.info("EasyPost MCP HTTP server shutting down", active_sessions=len(sessions))
-            token_cleanup_task.cancel()
-            try:
-                await token_cleanup_task
-            except asyncio.CancelledError:
-                pass
             for session in list(sessions.values()):
                 session.task.cancel()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
-    app.add_middleware(AuthMiddleware, token_store=token_store)
-
-    oauth_router = create_oauth_router(config, token_store)
-    app.include_router(oauth_router)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -113,11 +94,9 @@ async def start_http_transport(config: "AppConfig", services: "Services") -> Non
         new_session_id = str(uuid.uuid4())
         transport = StreamableHTTPServerTransport(mcp_session_id=new_session_id)
 
-        auth_context: dict | None = getattr(request.state, "auth", None)
         mcp_server = create_mcp_server(
             config,
             services,
-            get_auth_context=lambda: auth_context,
         )
 
         async def run_session() -> None:

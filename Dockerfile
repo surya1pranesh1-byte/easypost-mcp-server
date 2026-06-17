@@ -19,7 +19,7 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 
 # Copy application source
 COPY app/ ./app/
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 
 # Register the CLI entry point without reinstalling any dependency
 RUN pip install --no-cache-dir --no-deps -e .

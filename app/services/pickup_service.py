@@ -23,7 +23,6 @@ class PickupService:
         self._idempotency = idempotency
 
     async def schedule_pickup(self, input: SchedulePickupInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         await self._confirmations.require_confirmed(
             input,
             action="schedule_pickup",
@@ -48,7 +47,6 @@ class PickupService:
                     carrier_accounts=input.carrier_accounts,
                 ),
                 context,
-                api_key,
             )
             if audit := context.get("audit"):
                 pickup_rates = getattr(pickup, "pickup_rates", []) or []
@@ -70,7 +68,6 @@ class PickupService:
         return {**outcome["result"], "idempotent_replay": True} if outcome["reused"] else outcome["result"]
 
     async def cancel_pickup(self, input: CancelPickupInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         await self._confirmations.require_confirmed(
             input,
             action="cancel_pickup",
@@ -83,6 +80,5 @@ class PickupService:
             "pickup.cancel",
             lambda client: client.pickup.cancel(input.pickup_id),
             context,
-            api_key,
         )
         return {"ok": True, "pickup": pickup}

@@ -40,7 +40,6 @@ class ShipmentService:
         self._idempotency = idempotency
 
     async def create_shipment(self, input: CreateShipmentInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         input_dict = input.model_dump(exclude_none=True)
 
         async def operation() -> dict:
@@ -48,7 +47,6 @@ class ShipmentService:
                 "shipment.create",
                 lambda client: client.shipment.create(**input_dict),
                 context,
-                api_key,
             )
             raw_rates = getattr(shipment, "rates", []) or []
             rates = _map_selectable_rates(raw_rates)
@@ -77,12 +75,10 @@ class ShipmentService:
         return {**outcome["result"], "idempotent_replay": True} if outcome["reused"] else outcome["result"]
 
     async def buy_shipping_label(self, input: BuyShippingLabelInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         shipment = await self._easypost.execute(
             "shipment.retrieve",
             lambda client: client.shipment.retrieve(input.shipment_id),
             context,
-            api_key,
         )
         if not shipment:
             raise NotFoundError("shipment", input.shipment_id)
@@ -184,7 +180,6 @@ class ShipmentService:
                 "shipment.buy",
                 lambda client: client.shipment.buy(input.shipment_id, rate, insurance=input.insurance),
                 context,
-                api_key,
             )
             return {"ok": True, "shipment": map_shipment(bought), "purchased_rate": mapped_rate}
 
@@ -194,23 +189,19 @@ class ShipmentService:
         return {**outcome["result"], "idempotent_replay": True} if outcome["reused"] else outcome["result"]
 
     async def get_shipment(self, input: GetShipmentInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         shipment = await self._easypost.execute(
             "shipment.retrieve",
             lambda client: client.shipment.retrieve(input.shipment_id),
             context,
-            api_key,
         )
         return {"ok": True, "shipment": map_shipment(shipment)}
 
     async def list_shipments(self, input: ListShipmentsInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         params = input.model_dump(exclude_none=True)
         collection = await self._easypost.execute(
             "shipment.list",
             lambda client: client.shipment.all(**params),
             context,
-            api_key,
         )
         return {"ok": True, **map_collection(collection, map_shipment)}
 
@@ -219,7 +210,6 @@ class ShipmentService:
         return {"ok": True, "shipment_id": result["shipment"]["id"], "rates": result["rates"]}
 
     async def refund_shipment(self, input: RefundShipmentInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         await self._confirmations.require_confirmed(
             input,
             action="refund_shipment",
@@ -232,7 +222,6 @@ class ShipmentService:
             "shipment.refund",
             lambda client: client.shipment.refund(input.shipment_id),
             context,
-            api_key,
         )
         return {"ok": True, "shipment": map_shipment(shipment), "refund_status": getattr(shipment, "refund_status", None)}
 
@@ -240,7 +229,6 @@ class ShipmentService:
         return await self.refund_shipment(input, context)
 
     async def insure_shipment(self, input: InsureShipmentInput, context: dict) -> dict[str, Any]:
-        api_key = (context.get("auth") or {}).get("api_key")
         amount_val = float(input.amount) if isinstance(input.amount, str) else input.amount
         typed_conf = "INSURE" if amount_val >= 500 else None
         await self._confirmations.require_confirmed(
@@ -255,6 +243,5 @@ class ShipmentService:
             "shipment.insure",
             lambda client: client.shipment.insure(input.shipment_id, input.amount),
             context,
-            api_key,
         )
         return {"ok": True, "shipment": map_shipment(shipment), "insured_amount": input.amount}

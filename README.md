@@ -98,19 +98,13 @@ Options:
 | `validate_carrier` | Validate a carrier code |
 | `validate_service` | Validate a carrier/service combination |
 
-## HTTP Transport with OAuth
+## HTTP Transport
 
-When running with `--mode http`, the server implements OAuth 2.0 authorization code flow:
+When running with `--mode http`, the server uses the configured EasyPost API key directly and exposes:
 
-1. Set `OAUTH_ISSUER_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET` in `.env`
-2. The server exposes:
-   - `GET /.well-known/oauth-authorization-server` — discovery
-   - `GET /oauth/authorize` — authorization form
-   - `POST /oauth/authorize` — process API key
-   - `POST /oauth/token` — exchange code for bearer token
-   - `POST /mcp` + `GET /mcp` + `DELETE /mcp` — MCP Streamable HTTP endpoints (require Bearer token)
-   - `GET /health` — liveness probe → `{"status": "UP"}`
-   - `GET /ready` — readiness probe → `{"status": "READY"}` (503 if API key missing)
+- `POST /mcp` + `GET /mcp` + `DELETE /mcp` — MCP Streamable HTTP endpoints
+- `GET /health` — liveness probe → `{"status": "UP"}`
+- `GET /ready` — readiness probe → `{"status": "READY"}` (503 if API key is missing)
 
 ---
 
@@ -132,7 +126,9 @@ When running with `--mode http`, the server implements OAuth 2.0 authorization c
 │   └─────────────┘          │                                  │  │
 │                            │  GET /health   ── liveness       │  │
 │                            │  GET /ready    ── readiness      │  │
-│                            │  /oauth/*      ── auth flow      │  │
+│                            │  POST /mcp     ── tool calls     │  │
+│                            │  GET /mcp      ── session stream │  │
+│                            │  DELETE /mcp   ── session close  │  │
 │                            └──────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
             │                              │
@@ -163,7 +159,6 @@ When running with `--mode http`, the server implements OAuth 2.0 authorization c
 ```bash
 export GCP_PROJECT_ID=my-gcp-project
 export EASYPOST_API_KEY=EZAK...
-export OAUTH_CLIENT_SECRET=$(openssl rand -hex 32)
 
 bash deploy.sh
 ```
@@ -171,11 +166,10 @@ bash deploy.sh
 `deploy.sh` runs all phases automatically:
 1. Enables required GCP APIs
 2. Creates Artifact Registry repository
-3. Stores secrets in Secret Manager
+3. Stores the EasyPost key in Secret Manager
 4. Builds and pushes Docker image
 5. Deploys to Cloud Run
-6. Sets `OAUTH_ISSUER_URL` to the live Cloud Run URL
-7. Creates log-based metrics in Cloud Monitoring
+6. Creates log-based metrics in Cloud Monitoring
 
 ### Manual deployment
 
@@ -206,7 +200,6 @@ gcloud auth configure-docker us-central1-docker.pkg.dev
 ```bash
 # Never commit secrets. Store them in Secret Manager.
 echo -n "EZAK..." | gcloud secrets create easypost-api-key --data-file=-
-echo -n "my-secret" | gcloud secrets create oauth-client-secret --data-file=-
 ```
 
 #### 4. Build and push the image
@@ -238,25 +231,12 @@ gcloud run deploy easypost-mcp \
   --min-instances=1 \
   --max-instances=10 \
   --timeout=60s \
-  --set-secrets="EASYPOST_API_KEY=easypost-api-key:latest,OAUTH_CLIENT_SECRET=oauth-client-secret:latest" \
+  --set-secrets="EASYPOST_API_KEY=easypost-api-key:latest" \
   --set-env-vars="NODE_ENV=production,LOG_LEVEL=info,EASYPOST_MODE=production" \
   --allow-unauthenticated
 ```
 
-#### 6. Set OAuth issuer URL
-
-After first deploy, set the live URL so OAuth discovery works:
-
-```bash
-SERVICE_URL=$(gcloud run services describe easypost-mcp \
-  --region=us-central1 --format="value(status.url)")
-
-gcloud run services update easypost-mcp \
-  --region=us-central1 \
-  --update-env-vars="OAUTH_ISSUER_URL=${SERVICE_URL}"
-```
-
-#### Resource sizing rationale
+#### 6. Resource sizing rationale
 
 | Parameter | Value | Why |
 |---|---|---|
@@ -274,7 +254,6 @@ Set `--min-instances=0` to eliminate idle costs when cold starts (~1–2 s) are 
 | Secret name | Value | Notes |
 |---|---|---|
 | `easypost-api-key` | EasyPost production API key (`EZAK...`) | Never set as plain env var |
-| `oauth-client-secret` | Random 32-byte hex string | Shared with MCP connector clients |
 
 Secrets are injected at container startup as environment variables via `--set-secrets`. They never appear in Cloud Run configuration or logs.
 
@@ -297,33 +276,6 @@ Cloud Run automatically exports container metrics (CPU, memory, request count, r
 
 **Error Reporting**: Cloud Error Reporting auto-detects Python exceptions from Cloud Logging — no additional configuration required.
 
-### MCP Connector configuration
-
-For external users adding this server as an MCP connector (e.g., Claude.ai):
-
-```json
-{
-  "mcpServers": {
-    "easypost": {
-      "transport": {
-        "type": "streamableHttp",
-        "url": "https://<cloud-run-url>/mcp"
-      },
-      "auth": {
-        "type": "oauth2",
-        "authorizationUrl": "https://<cloud-run-url>/oauth/authorize",
-        "tokenUrl": "https://<cloud-run-url>/oauth/token",
-        "clientId": "easypost-mcp",
-        "clientSecret": "<OAUTH_CLIENT_SECRET>",
-        "scopes": []
-      }
-    }
-  }
-}
-```
-
-The OAuth flow prompts the user to enter their EasyPost API key, which is validated in real-time and exchanged for a short-lived bearer token. The key is never stored permanently.
-
 ### EasyPost Assistant integration
 
 For an internal AI assistant that needs to call the cloud-hosted MCP server:
@@ -333,26 +285,21 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-# 1. Obtain a bearer token via the OAuth token endpoint (client_credentials-style
-#    flow, or pre-issue a long-lived token via your own auth layer).
-async def get_mcp_client(service_url: str, bearer_token: str):
+async def get_mcp_client(service_url: str):
     timeout = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
     limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
 
     async with streamablehttp_client(
         f"{service_url}/mcp",
-        headers={"Authorization": f"Bearer {bearer_token}"},
         timeout=timeout,
-        # Retry on transient HTTP errors (503, 429) with exponential back-off
-        # using your preferred retry library (e.g. tenacity).
+        limits=limits,
     ) as (read_stream, write_stream, _):
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             yield session
 
-# 2. Call tools
-async def track_shipment(tracking_code: str, bearer_token: str) -> dict:
-    async with get_mcp_client("https://<cloud-run-url>", bearer_token) as mcp:
+async def track_shipment(tracking_code: str) -> dict:
+    async with get_mcp_client("https://<cloud-run-url>") as mcp:
         result = await mcp.call_tool("track_package", {"tracking_code": tracking_code})
         return result
 ```
@@ -370,8 +317,6 @@ async def track_shipment(tracking_code: str, bearer_token: str) -> dict:
 ### Production deployment checklist
 
 - [ ] `EASYPOST_API_KEY` stored in Secret Manager (not as env var)
-- [ ] `OAUTH_CLIENT_SECRET` stored in Secret Manager
-- [ ] `OAUTH_ISSUER_URL` set to the live Cloud Run URL
 - [ ] `NODE_ENV=production` and `EASYPOST_MODE=production` confirmed in Cloud Run env
 - [ ] `LOG_LEVEL=info` (not `debug`) in production
 - [ ] `--min-instances=1` to keep the assistant's latency predictable
@@ -396,8 +341,7 @@ app/
 ├── resources/       # Carrier/service/country resource cache
 ├── pipeline/        # Execution pipeline: validation, elicitation, anti-hallucination
 ├── schemas/         # Pydantic v2 input schemas per domain
-├── auth/            # OAuth token store
-├── middleware/       # Auth middleware, rate limiter, OAuth endpoints
+├── middleware/       # Rate limiter and transport middleware
 ├── adapters/        # EasyPost response mappers
 ├── elicitation/     # Fallback responses, field catalog
 ├── audit/           # Audit logger
@@ -414,7 +358,7 @@ app/
 - **FastAPI + Uvicorn** for HTTP transport (replaces Express)
 - **click** for the CLI (replaces Commander.js)
 - **asyncio.to_thread()** wraps the synchronous EasyPost Python SDK
-- **httpx** for async HTTP calls (OAuth key validation)
+- **httpx** for async HTTP calls to EasyPost
 - **Levenshtein fuzzy matching** for carrier/service suggestions (pure Python, no external deps)
 - **Anti-hallucination validation** rejects placeholder/garbage input before sending to EasyPost
 - **Workflow state** carries partial inputs across multi-turn elicitation flows
