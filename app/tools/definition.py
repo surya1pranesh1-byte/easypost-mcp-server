@@ -19,6 +19,7 @@ class ToolDefinition:
     handler: Callable[..., Coroutine[Any, Any, dict]]
     risk: ToolRisk | None = None
     annotations: dict[str, Any] = field(default_factory=dict)
+    exclude_fields: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.risk is None:
@@ -29,7 +30,7 @@ class ToolDefinition:
             "name": self.name,
             "title": self.title,
             "description": self.description,
-            "inputSchema": model_to_json_schema(self.schema_cls, self.name),
+            "inputSchema": model_to_json_schema(self.schema_cls, self.name, self.exclude_fields or None),
             "annotations": {
                 "category": self.category,
                 "risk": self.risk,

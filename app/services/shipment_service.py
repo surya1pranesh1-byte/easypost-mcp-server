@@ -25,6 +25,10 @@ def _map_selectable_rates(rates: list) -> list[dict]:
     return [{"option": i + 1, **(map_rate(r) or {})} for i, r in enumerate(rates)]
 
 
+def _strip_rate_ids(rates: list[dict]) -> list[dict]:
+    return [{k: v for k, v in r.items() if k != "id"} for r in rates]
+
+
 class ShipmentService:
     def __init__(
         self,
@@ -58,12 +62,20 @@ class ShipmentService:
                     "rate_count": len(rates),
                     "rate_ids": [r.get("id") for r in rates],
                 })
+            shipment_data = map_shipment(shipment)
+            # Strip rate IDs from the response so the AI cannot pass them directly
+            # to buy_shipping_label; rate selection must go through interactive flow.
+            display_rates = _strip_rate_ids(rates)
+            if isinstance(shipment_data.get("rates"), list):
+                shipment_data["rates"] = _strip_rate_ids(shipment_data["rates"])
             return {
                 "ok": True,
-                "shipment": map_shipment(shipment),
-                "rates": rates,
+                "shipment": shipment_data,
+                "rates": display_rates,
                 "next_step": (
-                    "Choose a numbered rate option or exact rate_id from rates and call buy_shipping_label with confirm=true."
+                    "Present the rates table to the user and ask them which carrier and service they prefer. "
+                    "Do NOT choose a rate on the user's behalf. "
+                    "Only call buy_shipping_label after the user has explicitly stated their choice."
                     if rates else
                     "No rates were returned by the carrier accounts for this shipment."
                 ),
@@ -116,16 +128,24 @@ class ShipmentService:
                         "shipment_id": input.shipment_id,
                         "reason": (elicited or {}).get("reason"),
                     })
+                full_rates = _map_selectable_rates(rates)
                 return create_fallback_response(
                     error_code="RATE_SELECTION_REQUIRED",
-                    message="Select a rate using the client form if available, or provide one numbered rate_option from available_rates.",
-                    missing_fields=["rate_option"],
-                    available_options=_map_selectable_rates(rates),
-                    examples={"rate_option": [1, 2]},
-                    next_action="Choose one available option and retry with rate_option, or use a client that supports elicitation.form.",
+                    message="No rate was selected. Show the list below to the user and wait for them to choose.",
+                    missing_fields=["rate_id"],
+                    available_options=full_rates,
+                    examples={},
+                    next_action=(
+                        "Display available_options as a plain list showing carrier, service, price, and delivery days. "
+                        "Ask the user: 'Which carrier and service would you like?' "
+                        "Do NOT suggest or pre-select any option. "
+                        "After the user names their choice, match it to the rate_id in available_options "
+                        "and retry buy_shipping_label with that rate_id."
+                    ),
                     metadata={
                         "elicitation_supported": self._elicitation.supports_form(context.get("server")) if self._elicitation else False,
                         "fallback_reason": (elicited or {}).get("reason"),
+                        "elicitation_error": (elicited or {}).get("error"),
                     },
                 )
 
@@ -176,9 +196,13 @@ class ShipmentService:
                     "rate_id": getattr(rate, "id", None),
                     "rate_option": input.rate_option,
                 })
+            rate_id = getattr(rate, "id", None)
+            buy_params: dict = {"rate": {"id": rate_id}}
+            if input.insurance is not None:
+                buy_params["insurance"] = input.insurance
             bought = await self._easypost.execute(
                 "shipment.buy",
-                lambda client: client.shipment.buy(input.shipment_id, rate, insurance=input.insurance),
+                lambda client: client.shipment.buy(input.shipment_id, **buy_params),
                 context,
             )
             return {"ok": True, "shipment": map_shipment(bought), "purchased_rate": mapped_rate}

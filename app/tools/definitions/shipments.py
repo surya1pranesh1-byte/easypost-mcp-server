@@ -33,9 +33,15 @@ def shipment_tools(services: "Services") -> list[ToolDefinition]:
             name="buy_shipping_label",
             title="Buy Shipping Label",
             category=ToolCategory.SHIPMENTS,
-            description="Buy a shipping label for an existing shipment using client elicitation, exact returned rate_id, or numbered rate_option. Requires confirmation and idempotency_key.",
+            description=(
+                "Buy a shipping label for an existing shipment. "
+                "Call this tool without rate_id to trigger interactive rate selection — "
+                "the tool will fetch available rates and present them for the user to choose. "
+                "Only supply rate_id when the user has explicitly stated an exact rate to use."
+            ),
             schema_cls=BuyShippingLabelInput,
             handler=services.shipments.buy_shipping_label,
+            exclude_fields=["rate_option"],
         ),
         ToolDefinition(
             name="get_shipment",

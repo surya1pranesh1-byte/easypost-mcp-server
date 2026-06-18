@@ -44,10 +44,21 @@ def validate_input(
     return parsed
 
 
-def model_to_json_schema(schema_cls: Type[BaseModel], name: str | None = None) -> dict[str, Any]:
+def model_to_json_schema(
+    schema_cls: Type[BaseModel],
+    name: str | None = None,
+    exclude_fields: list[str] | None = None,
+) -> dict[str, Any]:
     """Convert a Pydantic model to a JSON Schema dict for MCP tool registration."""
     schema = schema_cls.model_json_schema()
     schema.pop("title", None)
     if name:
         schema["title"] = name
+    if exclude_fields:
+        props = schema.get("properties", {})
+        required = schema.get("required", [])
+        for f in exclude_fields:
+            props.pop(f, None)
+            if f in required:
+                required.remove(f)
     return schema

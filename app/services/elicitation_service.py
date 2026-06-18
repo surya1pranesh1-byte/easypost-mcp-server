@@ -8,17 +8,12 @@ from app.elicitation.field_catalog import schema_for_field
 
 class ElicitationService:
     def supports_form(self, server: Any) -> bool:
-        caps = None
         try:
-            caps = server.get_client_capabilities() if server else None
+            ctx = server.request_context if server else None
+            caps = ctx.session.client_params.capabilities if ctx else None
+            return getattr(caps, "elicitation", None) is not None
         except Exception:
-            pass
-        if not caps:
             return False
-        elicitation = getattr(caps, "elicitation", None) or {}
-        if isinstance(elicitation, dict):
-            return bool(elicitation.get("form"))
-        return bool(getattr(elicitation, "form", False))
 
     async def request_form(
         self,
@@ -29,26 +24,31 @@ class ElicitationService:
         required: list[str] | None = None,
         timeout_ms: int = 120000,
     ) -> dict[str, Any]:
-        if not self.supports_form(server):
+        if not server:
             return {"accepted": False, "reason": "FORM_ELICITATION_UNAVAILABLE"}
         try:
-            result = await server.elicit_input(
-                {
-                    "mode": "form",
-                    "message": message,
-                    "requestedSchema": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required or [],
-                    },
-                },
-                {"timeout": timeout_ms},
+            ctx = server.request_context
+            requested_schema: dict = {
+                "type": "object",
+                "properties": properties,
+                "required": required or [],
+            }
+            result = await ctx.session.elicit_form(
+                message,
+                requested_schema,
+                related_request_id=ctx.request_id,
             )
-            if result.get("action") != "accept":
-                action = str(result.get("action") or "UNKNOWN").upper()
+            if result.action != "accept":
+                action = str(result.action or "UNKNOWN").upper()
                 return {"accepted": False, "reason": f"ELICITATION_{action}"}
-            return {"accepted": True, "content": result.get("content") or {}}
+            return {"accepted": True, "content": result.content or {}}
         except Exception as exc:
+            from app.logging.logger import get_logger
+            get_logger().warning(
+                "Elicitation failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             return {
                 "accepted": False,
                 "reason": "ELICITATION_FAILED",
@@ -227,8 +227,8 @@ class ElicitationService:
         confirm_default: bool = False,
         timeout_ms: int = 120000,
     ) -> dict[str, Any]:
-        if not self.supports_form(server) or not rates:
-            return {"selected": False, "reason": "FORM_ELICITATION_UNAVAILABLE"}
+        if not rates:
+            return {"selected": False, "reason": "NO_RATES_AVAILABLE"}
 
         result = await self.request_form(
             server=server,
@@ -242,7 +242,7 @@ class ElicitationService:
                     "oneOf": [
                         {
                             "const": str(i + 1),
-                            "title": f"{i + 1}. {getattr(r, 'carrier', r.get('carrier', ''))} {getattr(r, 'service', r.get('service', ''))} - {getattr(r, 'rate', r.get('rate', ''))} {getattr(r, 'currency', r.get('currency', 'USD'))}",
+                            "title": _rate_label(r),
                         }
                         for i, r in enumerate(rates)
                     ],
@@ -270,6 +270,16 @@ class ElicitationService:
             "rate_option": option,
             "confirm": result["content"].get("confirm") is True,
         }
+
+
+def _rate_label(r: Any) -> str:
+    carrier = getattr(r, "carrier", None) or (r.get("carrier") if isinstance(r, dict) else "") or ""
+    service = getattr(r, "service", None) or (r.get("service") if isinstance(r, dict) else "") or ""
+    rate = getattr(r, "rate", None) or (r.get("rate") if isinstance(r, dict) else "") or ""
+    currency = getattr(r, "currency", None) or (r.get("currency") if isinstance(r, dict) else "") or "USD"
+    days = getattr(r, "delivery_days", None) or (r.get("delivery_days") if isinstance(r, dict) else None)
+    days_str = f" · {days}d" if days else ""
+    return f"{carrier} {service} — ${rate} {currency}{days_str}".strip()
 
 
 def _suggestion_label(suggestion: dict) -> str:
